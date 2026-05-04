@@ -43,21 +43,27 @@ export default function FolderUploadPage() {
       formData.append("folderId", folderId as string);
 
       try {
-        await fetch("/api/upload", {
+        const res = await fetch("/api/upload", {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           body: formData,
         });
+
+        const result = await res.json();
+        console.log("[upload response]", file.name, res.status, result);
+
+        if (!res.ok) throw new Error(result.error || "Upload gagal");
+
         setUploadQueue(prev => prev.map(q => q.name === file.name ? { ...q, status: "done" } : q));
-      } catch {
+        completed++;
+      } catch (err: any) {
+        console.error("[upload error]", file.name, err.message);
         setUploadQueue(prev => prev.map(q => q.name === file.name ? { ...q, status: "error" } : q));
       }
 
-      completed++;
-      setDone(completed);
+      setDone(prev => prev + 1);
     }
 
-    // Update status folder
     await updateDoc(doc(db, "folders", folderId as string), {
       status: "ready",
       totalFiles: (folder.totalFiles || 0) + completed,
