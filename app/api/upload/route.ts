@@ -1,72 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminDb } from "@/lib/firebase-admin";
-import { getFolderFiles } from "@/lib/drive";
+import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { drive } from "@/lib/drive";
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ token: string }> }
-) {
+export async function POST(request: NextRequest) {
   try {
-    const { token } = await params;
+    const authHeader = request.headers.get("Authorization");
+    const token = authHeader?.replace("Bearer ", "");
+    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const clientsSnap = await adminDb
-      .collection("clients")
-      .where("token", "==", token)
-      .limit(1)
-      .get();
+    await adminAuth.verifyIdToken(token);
 
-    if (clientsSnap.empty) {
-      return NextResponse.json({ error: "Link tidak valid!" }, { status: 404 });
+    const formData = await request.formData();
+    const file = formData.get("file") as File;
+    const driveId = formData.get("driveId") as string;
+    const folderId = formData.get("folderId") as string;
+
+    if (!file || !driveId) {
+      return NextResponse.json({ error: "File atau folder tidak valid" }, { status: 400 });
     }
 
-    const clientDoc = clientsSnap.docs[0];
-    const client = { id: clientDoc.id, ...clientDoc.data() };
+    const buffer = Buffer.from(await file.arrayBuffer());
 
-    const folderDoc = await adminDb
-      .collection("folders")
-      .doc((client as any).folderId)
-      .get();
+    const { Readable } = require("stream");
 
-    const driveId = folderDoc.data()?.driveId;
-
-    const files = await getFolderFiles(driveId);
-    const photos = files.map((f: any) => ({
-      name: f.name,
-      thumb: `https://drive.google.com/thumbnail?id=${f.id}&sz=w600`,
-      id: f.id,
-    }));
-
-    return NextResponse.json({ client, photos });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-}
-
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ token: string }> }
-) {
-  try {
-    const { token } = await params;
-    const { selectedFiles } = await request.json();
-
-    const clientsSnap = await adminDb
-      .collection("clients")
-      .where("token", "==", token)
-      .limit(1)
-      .get();
-
-    if (clientsSnap.empty) {
-      return NextResponse.json({ error: "Link tidak valid!" }, { status: 404 });
-    }
-
-    const clientDoc = clientsSnap.docs[0];
-
-    await adminDb.collection("clients").doc(clientDoc.id).update({
-      selectedFiles,
-      status: "selesai",
-      submittedAt: new Date(),
+    await drive.files.create({
+      requestBody: {
+        name: file.name,
+        parents: [driveId],
+      },
+      media: {
+        mimeType: file.type,
+        body: Readable.from(buffer),
+      },
+      fields: "id, name",
     });
+
+    const folderRef = adminDb.collection("folders").doc(folderId);
+    const folderSnap = await folderRef.get();
+    const currentTotal = folderSnap.data()?.totalFiles || 0;
+    await folderRef.update({ totalFiles: currentTotal + 1 });
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
