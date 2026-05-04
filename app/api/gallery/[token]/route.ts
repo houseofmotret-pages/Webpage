@@ -2,12 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { getFolderFiles } from "@/lib/drive";
 
-export async function GET(request: NextRequest, { params }: { params: { token: string } }) {
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ token: string }> }
+) {
   try {
-    const { token } = params;
+    const { token } = await params;
 
-    // Cari client berdasarkan token
-    const clientsSnap = await adminDb.collection("clients").where("token", "==", token).limit(1).get();
+    const clientsSnap = await adminDb
+      .collection("clients")
+      .where("token", "==", token)
+      .limit(1)
+      .get();
+
     if (clientsSnap.empty) {
       return NextResponse.json({ error: "Link tidak valid!" }, { status: 404 });
     }
@@ -15,11 +22,12 @@ export async function GET(request: NextRequest, { params }: { params: { token: s
     const clientDoc = clientsSnap.docs[0];
     const client = { id: clientDoc.id, ...clientDoc.data() };
 
-    // Ambil folder dari Firestore
-    const folderDoc = await adminDb.collection("folders").doc((client as any).folderId).get();
-    const driveId = folderDoc.data()?.driveId;
+    const folderDoc = await adminDb
+      .collection("folders")
+      .doc((client as any).folderId)
+      .get();
 
-    // Ambil foto dari Drive
+    const driveId = folderDoc.data()?.driveId;
     const files = await getFolderFiles(driveId);
     const photos = files.map((f: any) => ({
       name: f.name,
@@ -33,20 +41,26 @@ export async function GET(request: NextRequest, { params }: { params: { token: s
   }
 }
 
-export async function POST(request: NextRequest, { params }: { params: { token: string } }) {
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ token: string }> }
+) {
   try {
-    const { token } = params;
+    const { token } = await params;
     const { selectedFiles } = await request.json();
 
-    // Cari client
-    const clientsSnap = await adminDb.collection("clients").where("token", "==", token).limit(1).get();
+    const clientsSnap = await adminDb
+      .collection("clients")
+      .where("token", "==", token)
+      .limit(1)
+      .get();
+
     if (clientsSnap.empty) {
       return NextResponse.json({ error: "Link tidak valid!" }, { status: 404 });
     }
 
     const clientDoc = clientsSnap.docs[0];
 
-    // Update status & simpan pilihan
     await adminDb.collection("clients").doc(clientDoc.id).update({
       selectedFiles,
       status: "selesai",
