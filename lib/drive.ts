@@ -18,6 +18,7 @@ export async function createFolder(name: string, parentId?: string) {
       parents: [parentId || process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID!],
     },
     fields: "id, name, webViewLink",
+    supportsAllDrives: true,          // ← tambah ini
   });
   return res.data;
 }
