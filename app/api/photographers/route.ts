@@ -5,14 +5,12 @@ export async function POST(request: NextRequest) {
   try {
     const { name, email, password } = await request.json();
 
-    // Buat user di Firebase Auth
     const user = await adminAuth.createUser({
       email,
       password,
       displayName: name,
     });
 
-    // Simpan ke Firestore
     await adminDb.collection("users").doc(user.uid).set({
       name,
       email,
@@ -22,6 +20,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, uid: user.uid });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("CREATE USER ERROR:", error.code, error.message);
+    return NextResponse.json({ 
+      error: error.message,
+      code: error.code 
+    }, { status: 500 });
   }
 }
