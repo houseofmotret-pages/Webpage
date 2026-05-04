@@ -1,7 +1,8 @@
 "use client";
 import { useState } from "react";
-import { auth } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
@@ -11,6 +12,27 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
+  async function handleRedirect(uid: string, token: string) {
+    // Simpan session
+    await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+
+    // Cek role di Firestore
+    const userDoc = await getDoc(doc(db, "users", uid));
+    const role = userDoc.data()?.role;
+
+    if (role === "admin") {
+      router.push("/admin/dashboard");
+    } else if (role === "photographer") {
+      router.push("/photographer/dashboard");
+    } else {
+      setError("Akun tidak memiliki akses!");
+    }
+  }
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -18,12 +40,7 @@ export default function LoginPage() {
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
       const token = await result.user.getIdToken();
-      await fetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      router.push("/admin/dashboard");
+      await handleRedirect(result.user.uid, token);
     } catch {
       setError("Email atau password salah!");
     } finally {
@@ -37,12 +54,7 @@ export default function LoginPage() {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
       const token = await result.user.getIdToken();
-      await fetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      router.push("/admin/dashboard");
+      await handleRedirect(result.user.uid, token);
     } catch {
       setError("Login Google gagal!");
     } finally {
