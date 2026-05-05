@@ -16,47 +16,33 @@ export async function POST(request: NextRequest) {
     const driveId = formData.get("driveId") as string;
     const folderId = formData.get("folderId") as string;
 
-    // LOG INI — cek di Vercel logs
-    console.log("[upload] driveId:", driveId);
-    console.log("[upload] folderId:", folderId);
-    console.log("[upload] file:", file?.name, file?.type);
-
-    if (!file) {
-      return NextResponse.json({ error: "File tidak ada" }, { status: 400 });
-    }
-    if (!driveId) {
-      return NextResponse.json({ error: "driveId kosong — folder belum punya Drive ID" }, { status: 400 });
+    if (!file || !driveId) {
+      return NextResponse.json({ error: "File atau folder tidak valid" }, { status: 400 });
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
 
-    const driveRes = await drive.files.create({
+    await drive.files.create({
+      supportsAllDrives: true,
       requestBody: {
         name: file.name,
         parents: [driveId],
       },
       media: {
-        mimeType: file.type || "image/jpeg",
+        mimeType: file.type,
         body: Readable.from(buffer),
       },
-      fields: "id, name, webViewLink",
+      fields: "id, name",
     });
 
-    console.log("[upload] Drive file created:", driveRes.data.id, driveRes.data.name);
-
-    // Update Firestore
     const folderRef = adminDb.collection("folders").doc(folderId);
     const folderSnap = await folderRef.get();
     const currentTotal = folderSnap.data()?.totalFiles || 0;
     await folderRef.update({ totalFiles: currentTotal + 1 });
 
-    return NextResponse.json({ 
-      success: true, 
-      fileId: driveRes.data.id,
-      fileName: driveRes.data.name 
-    });
+    return NextResponse.json({ success: true });
   } catch (error: any) {
-    console.error("[upload] ERROR:", error.message, error.code);
-    return NextResponse.json({ error: error.message, code: error.code }, { status: 500 });
+    console.error("Upload error:", error.message);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
