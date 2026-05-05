@@ -4,67 +4,109 @@ import { useParams } from "next/navigation";
 import { auth, db } from "@/lib/firebase";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 
+declare global {
+  interface Window {
+    google: any;
+    gapi: any;
+    tokenClient: any;
+  }
+}
+
 export default function FolderUploadPage() {
-  const { folderId } = useParams();
+  const params = useParams();
+  const folderId = params?.folderId as string;
   const [folder, setFolder] = useState<any>(null);
-  const [uploading, setUploading] = useState(false);
   const [uploadQueue, setUploadQueue] = useState<any[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [done, setDone] = useState(0);
   const [total, setTotal] = useState(0);
+  const [accessToken, setAccessToken] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { loadFolder(); }, [folderId]);
+  useEffect(() => {
+    if (folderId) loadFolder();
+    loadGoogleAuth();
+  }, [folderId]);
 
   async function loadFolder() {
-    const snap = await getDoc(doc(db, "folders", folderId as string));
-    if (snap.exists()) setFolder({ id: snap.id, ...snap.data() });
+    try {
+      const snap = await getDoc(doc(db, "folders", folderId));
+      if (snap.exists()) setFolder({ id: snap.id, ...snap.data() });
+    } catch (err) {
+      console.error("loadFolder error:", err);
+    }
+  }
+
+  function loadGoogleAuth() {
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.onload = initTokenClient;
+    document.body.appendChild(script);
+  }
+
+  function initTokenClient() {
+    window.tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+      scope: "https://www.googleapis.com/auth/drive.file",
+      callback: (response: any) => {
+        if (response.access_token) {
+          setAccessToken(response.access_token);
+        }
+      },
+    });
+  }
+
+  function requestAccess() {
+    if (window.tokenClient) {
+      window.tokenClient.requestAccessToken();
+    }
   }
 
   async function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!accessToken) {
+      alert("Klik 'Hubungkan Google Drive' dulu!");
+      return;
+    }
+
     const files = Array.from(e.target.files || []);
-    if (!files.length) return;
+    if (!files.length || !folder) return;
 
     setTotal(files.length);
     setDone(0);
     setUploading(true);
     setUploadQueue(files.map(f => ({ name: f.name, status: "pending" })));
 
-    const user = auth.currentUser;
-    if (!user) return;
-    const token = await user.getIdToken();
-
     let completed = 0;
     for (const file of files) {
       setUploadQueue(prev => prev.map(q => q.name === file.name ? { ...q, status: "uploading" } : q));
 
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("driveId", folder.driveId);
-      formData.append("folderId", folderId as string);
-
       try {
-        const res = await fetch("/api/upload", {
+        const metadata = {
+          name: file.name,
+          parents: [folder.driveId],
+        };
+
+        const form = new FormData();
+        form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+        form.append("file", file);
+
+        const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
           method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-          body: formData,
+          headers: { Authorization: `Bearer ${accessToken}` },
+          body: form,
         });
 
-        const result = await res.json();
-        console.log("[upload response]", file.name, res.status, result);
-
-        if (!res.ok) throw new Error(result.error || "Upload gagal");
-
+        if (!res.ok) throw new Error("Upload gagal");
         setUploadQueue(prev => prev.map(q => q.name === file.name ? { ...q, status: "done" } : q));
         completed++;
-      } catch (err: any) {
-        console.error("[upload error]", file.name, err.message);
+      } catch {
         setUploadQueue(prev => prev.map(q => q.name === file.name ? { ...q, status: "error" } : q));
       }
 
-      setDone(prev => prev + 1);
+      setDone(completed);
     }
 
-    await updateDoc(doc(db, "folders", folderId as string), {
+    await updateDoc(doc(db, "folders", folderId), {
       status: "ready",
       totalFiles: (folder.totalFiles || 0) + completed,
     });
@@ -73,6 +115,7 @@ export default function FolderUploadPage() {
     loadFolder();
   }
 
+  if (!folderId) return <div className="p-8 text-center text-gray-400">Folder tidak ditemukan</div>;
   if (!folder) return <div className="p-8 text-center text-gray-400">Memuat...</div>;
 
   return (
@@ -84,27 +127,43 @@ export default function FolderUploadPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Upload Area */}
         <div className="bg-white rounded-xl border border-gray-100 p-6">
           <h3 className="font-semibold text-gray-900 mb-4">Upload Foto</h3>
 
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-gray-200 rounded-xl p-10 text-center cursor-pointer hover:border-gray-400 hover:bg-gray-50 transition"
-          >
-            <div className="text-4xl mb-3">📸</div>
-            <div className="text-sm font-medium text-gray-700">Klik untuk pilih foto</div>
-            <div className="text-xs text-gray-400 mt-1">JPG, PNG, RAW — file asli tanpa kompresi</div>
-          </div>
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept="image/*"
-            onChange={handleFiles}
-            className="hidden"
-          />
+          {!accessToken ? (
+            <div className="text-center py-8">
+              <div className="text-4xl mb-4">🔐</div>
+              <p className="text-sm text-gray-500 mb-4">Hubungkan Google Drive lo dulu untuk upload foto</p>
+              <button
+                onClick={requestAccess}
+                className="bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+              >
+                Hubungkan Google Drive
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="mb-3 flex items-center gap-2 text-sm text-green-600 bg-green-50 p-3 rounded-lg">
+                ✅ Google Drive terhubung
+              </div>
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-gray-200 rounded-xl p-10 text-center cursor-pointer hover:border-gray-400 hover:bg-gray-50 transition"
+              >
+                <div className="text-4xl mb-3">📸</div>
+                <div className="text-sm font-medium text-gray-700">Klik untuk pilih foto</div>
+                <div className="text-xs text-gray-400 mt-1">JPG, PNG, RAW — file asli tanpa kompresi</div>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={handleFiles}
+                className="hidden"
+              />
+            </>
+          )}
 
           {uploading && (
             <div className="mt-4">
@@ -122,7 +181,6 @@ export default function FolderUploadPage() {
           )}
         </div>
 
-        {/* Info & Status */}
         <div className="bg-white rounded-xl border border-gray-100 p-6">
           <h3 className="font-semibold text-gray-900 mb-4">Info Folder</h3>
           <div className="space-y-3">
@@ -150,7 +208,6 @@ export default function FolderUploadPage() {
         </div>
       </div>
 
-      {/* Upload Queue */}
       {uploadQueue.length > 0 && (
         <div className="mt-6 bg-white rounded-xl border border-gray-100 p-6">
           <h3 className="font-semibold text-gray-900 mb-4">Progress Upload</h3>
